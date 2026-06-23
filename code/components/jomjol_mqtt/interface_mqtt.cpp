@@ -490,6 +490,11 @@ bool mqtt_handler_stay_awake(std::string _topic, char* _data, int _data_len)
 void MQTTconnected(){
     if (mqtt_connected) {
         LogFile.WriteToFile(ESP_LOG_INFO, TAG, "Connected to broker");
+
+        /* Re-assert availability immediately on every (re)connect (retained), so Home Assistant
+         * recovers from a stale "connection lost" within seconds instead of waiting for the next
+         * digitization round to republish it. QoS 0 to stay non-blocking in the event handler. */
+        esp_mqtt_client_publish(client, lwt_topic.c_str(), lwt_connected.c_str(), 0, 0, 1);
         
         if (connectFunktionMap != NULL) {
             for(std::map<std::string, std::function<void()>>::iterator it = connectFunktionMap->begin(); it != connectFunktionMap->end(); ++it) {

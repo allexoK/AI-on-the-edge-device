@@ -37,6 +37,7 @@ std::string rateUnit = "Unit/Minute";
 float roundInterval; // Minutes
 int keepAlive = 0; // Seconds
 bool retainFlag;
+bool deepSleepEnabled = false; // SleepWhileIdle: omit LWT availability_topic, rely on expire_after (see sendHomeAssistantDiscoveryTopic)
 static std::string maintopic, domoticzintopic;
 bool sendingOf_DiscoveryAndStaticTopics_scheduled = true; // Set it to true to make sure it gets sent at least once after startup
 
@@ -156,12 +157,41 @@ bool sendHomeAssistantDiscoveryTopic(std::string group, std::string field,
 
     if (entityCategory != "") {
         payload += "\"entity_category\": \"" + entityCategory + "\",";
-    } 
+    }
 
-    payload += 
-        "\"availability_topic\": \"~/" + std::string(LWT_TOPIC) + "\","  +
-        "\"payload_available\": \"" + LWT_CONNECTED + "\","  +
-        "\"payload_not_available\": \"" + LWT_DISCONNECTED + "\",";
+    /* expire_after: HA flags the entity stale if the device stops reporting (e.g. battery dies
+     * mid-sleep), while still tolerating a single skipped round - e.g. a reading lost to poor
+     * WiFi. Sized at 2x the digitization interval (one skipped poll) + 120s for wake/connect/
+     * processing jitter.
+     *
+     * Only applied to topics with a predictable per-round cadence:
+     *   - system telemetry (uptime/freeMem/wifiRSSI/CPUtemp) and battery_* are published
+     *     unconditionally every round, so they are reliable liveness indicators;
+     *   - "value" is the user-facing reading; it is published only when a result exists, so a
+     *     sustained absence legitimately means "no fresh reading" and SHOULD go stale.
+     * Excluded: static topics (IP/MAC/firmware/hostname/interval) are sent once and would expire
+     * incorrectly; raw, error, rate and timestamp are published only when non-empty so would
+     * expire on any round a meter omits them; the button/switch controls have no periodic state. */
+    bool perRoundTelemetry =
+        (field == "value" ||
+         field == "uptime" || field == "freeMem" || field == "wifiRSSI" || field == "CPUtemp" ||
+         field == "battery_voltage" || field == "battery_percent");
+    if (perRoundTelemetry && roundInterval > 0) {
+        int expireAfter = (int)(roundInterval * 60.0 * 2) + 120;
+        payload += "\"expire_after\": " + std::to_string(expireAfter) + ",";
+    }
+
+    /* Availability: an always-on device's retained Last Will on <maintopic>/connection cleanly
+     * signals offline. But a deep-sleep device severs the link ungracefully every nap (it cannot
+     * reliably get a DISCONNECT out before power-off), so the Will fires and HA would show it
+     * unavailable mid-sleep. In sleep mode we OMIT availability_topic and let expire_after (above)
+     * judge liveness by data freshness instead. */
+    if (!deepSleepEnabled) {
+        payload +=
+            "\"availability_topic\": \"~/" + std::string(LWT_TOPIC) + "\","  +
+            "\"payload_available\": \"" + LWT_CONNECTED + "\","  +
+            "\"payload_not_available\": \"" + LWT_DISCONNECTED + "\",";
+    }
 
     payload += string("\"device\": {")  +
         "\"identifiers\": [\"" + maintopic + "\"],"  +
@@ -409,6 +439,10 @@ void SetHomeassistantDiscoveryEnabled(bool enabled) {
 
 void setMqtt_Server_Retain(bool _retainFlag) {
     retainFlag = _retainFlag;
+}
+
+void setMqtt_DeepSleepEnabled(bool _enabled) {
+    deepSleepEnabled = _enabled;
 }
 
 void mqttServer_setMainTopic( std::string _maintopic) {

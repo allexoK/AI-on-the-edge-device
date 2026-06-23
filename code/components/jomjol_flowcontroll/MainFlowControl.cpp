@@ -38,6 +38,11 @@
 #include "psram.h"
 #include "basic_auth.h"
 
+#ifdef ENABLE_MQTT
+#include "interface_mqtt.h"
+#include "server_mqtt.h"
+#endif // ENABLE_MQTT
+
 // support IDF 5.x
 #ifndef portTICK_RATE_MS
 #define portTICK_RATE_MS portTICK_PERIOD_MS
@@ -1573,6 +1578,13 @@ void task_autodoFlow(void *pvParameter)
     flowctrl.setSleepWhileIdle(sleep_while_idle);
     flowctrl.setSleepGraceSeconds(sleep_grace_seconds);
     autostartIsEnabled = flowctrl.getIsAutoStart();
+
+#ifdef ENABLE_MQTT
+    // Deep-sleep devices cannot cleanly close MQTT before power-off, so the broker's Last Will
+    // would flap them "unavailable" every nap. Tell the HA discovery to drop availability_topic
+    // and rely on expire_after instead (see sendHomeAssistantDiscoveryTopic).
+    setMqtt_DeepSleepEnabled(sleep_while_idle);
+#endif
 
 #if defined(BOARD_ESP32_S3_ALEKSEI)
     if (flowctrl.getBatteryEnabled()) {
