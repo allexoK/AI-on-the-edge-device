@@ -55,6 +55,12 @@ long auto_interval = 0;
 bool sleep_while_idle = false;
 int sleep_grace_seconds = 10;
 bool autostartIsEnabled = false;
+// Set by handler_flow_start() so a manual round runs promptly even while the
+// Stay-Awake idle loop is active. That loop waits in repeated short vTaskDelay
+// chunks, which re-arm after the xTaskAbortDelay that normally services
+// /flow_start -- swallowing the manual trigger until the whole AutoTimer
+// interval elapses. See allexoK#28.
+volatile bool manualFlowStartRequested = false;
 
 int countRounds = 0;
 bool isPlannedReboot = false;
@@ -285,6 +291,7 @@ esp_err_t handler_flow_start(httpd_req_t *req)
 
     if (autostartIsEnabled)
     {
+        manualFlowStartRequested = true;         // break the Stay-Awake idle loop too (allexoK#28), not just the single vTaskDelay
         xTaskAbortDelay(xHandletask_autodoFlow); // Delay will be aborted if task is in blocked (waiting) state. If task is already running, no action
         LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Flow start triggered by REST API /flow_start");
         const char *resp_str = "The flow is going to be started immediately or is already running";
@@ -314,6 +321,7 @@ esp_err_t MQTTCtrlFlowStart(std::string _topic)
 
     if (autostartIsEnabled)
     {
+        manualFlowStartRequested = true;         // break the Stay-Awake idle loop too (allexoK#28), not just the single vTaskDelay
         xTaskAbortDelay(xHandletask_autodoFlow); // Delay will be aborted if task is in blocked (waiting) state. If task is already running, no action
         LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "Flow start triggered by MQTT topic " + _topic);
     }
@@ -1600,6 +1608,7 @@ void task_autodoFlow(void *pvParameter)
 
     while (autostartIsEnabled)
     {
+        manualFlowStartRequested = false; // consumed: a (manual or scheduled) round is now starting
         LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "----------------------------------------------------------------"); // Clear separation between runs
         time_t roundStartTime = getUpTime();
 
@@ -1693,7 +1702,7 @@ void task_autodoFlow(void *pvParameter)
                 // sleep immediately instead of staying awake until the next round.
                 bool announced_stay_awake = false;
                 fr_delta_ms = (esp_timer_get_time() - fr_start) / 1000;
-                while ((auto_interval > fr_delta_ms) && StayAwake_Get()) {
+                while ((auto_interval > fr_delta_ms) && StayAwake_Get() && !manualFlowStartRequested) {
                     if (!announced_stay_awake) {
                         LogFile.WriteToFile(ESP_LOG_INFO, TAG, "Stay-Awake override is on -- skipping deep sleep");
                         announced_stay_awake = true;
@@ -1703,7 +1712,7 @@ void task_autodoFlow(void *pvParameter)
                     fr_delta_ms = (esp_timer_get_time() - fr_start) / 1000;
                 }
 
-                if (auto_interval > fr_delta_ms) {
+                if (auto_interval > fr_delta_ms && !manualFlowStartRequested) {
                     LogFile.WriteToFile(ESP_LOG_INFO, TAG, "Deep sleep for " + std::to_string(auto_interval - fr_delta_ms) + "ms");
 
 #if defined(BOARD_ESP32_S3_ALEKSEI)
