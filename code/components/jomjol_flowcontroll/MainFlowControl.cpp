@@ -6,6 +6,8 @@
 #include "esp_log.h"
 #include <esp_timer.h>
 #include <esp_sleep.h>
+#include "esp_idf_version.h"
+#include "sdcard_init.h"
 #include "driver/gpio.h"
 #if defined(BOARD_ESP32_S3_ALEKSEI)
 #include "driver/rtc_io.h"
@@ -1705,6 +1707,21 @@ void task_autodoFlow(void *pvParameter)
 
                 if (auto_interval > fr_delta_ms) {
                     LogFile.WriteToFile(ESP_LOG_INFO, TAG, "Deep sleep for " + std::to_string(auto_interval - fr_delta_ms) + "ms");
+
+                    // Cleanly unmount the SD card before sleeping. Deep sleep cuts
+                    // the SD power rail on battery boards (PER_ENABLE, below) and a
+                    // cold boot remounts from scratch -- so the volume must be left
+                    // consistent first. Unmounting flushes the FATFS window, FAT
+                    // table and FSINFO sector; without it an interrupted FAT
+                    // metadata write corrupts the filesystem (observed as cards that
+                    // revert to the "missing config.ini" emergency AP and then fail
+                    // to mount at all). This must be the last SD access before sleep.
+                    // Gated on the same IDF version as the mount call in main.cpp.
+#if (ESP_IDF_VERSION <= ESP_IDF_VERSION_VAL(5, 1, 2))
+                    esp_vfs_fat_sdmmc_unmount_mh();
+#else
+                    esp_vfs_fat_sdmmc_unmount();
+#endif
 
 #if defined(BOARD_ESP32_S3_ALEKSEI)
                     // Battery-powered AI-on-the-edge-cam: kill the W5500 ethernet PHY

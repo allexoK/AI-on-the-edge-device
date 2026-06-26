@@ -96,6 +96,27 @@ esp_err_t esp_vfs_fat_sdmmc_mount_mh(const char* base_path, const sdmmc_host_t* 
  */
 esp_err_t esp_vfs_fat_sdspi_mount_mh(const char* base_path, const sdmmc_host_t* host_config_input, const sdspi_device_config_t* slot_config, const esp_vfs_fat_mount_config_t* mount_config, sdmmc_card_t** out_card);
 
+/**
+ * @brief Unmount the single SD card mounted via esp_vfs_fat_sdmmc_mount_mh().
+ *
+ * Counterpart to esp_vfs_fat_sdmmc_mount_mh(). Flushes the FATFS window, FAT
+ * table and FSINFO sector, then unregisters the volume and deinitialises the
+ * host. Call this before removing power from the card (e.g. before deep sleep
+ * on battery boards that gate the SD rail) to avoid filesystem corruption.
+ *
+ * @return ESP_OK on success, or an error code from the FATFS / VFS layers.
+ */
+esp_err_t esp_vfs_fat_sdmmc_unmount_mh(void);
+
+/**
+ * @brief Unmount a specific SD card mounted via esp_vfs_fat_sdmmc_mount_mh().
+ *
+ * @param base_path  path where the partition was registered (e.g. "/sdcard")
+ * @param card       card handle returned by the mount call
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if the card is not mounted.
+ */
+esp_err_t esp_vfs_fat_sdcard_unmount_mh(const char *base_path, sdmmc_card_t *card);
+
 #ifdef __cplusplus
 }
 #endif
