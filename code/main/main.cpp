@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <regex>
+#include <unistd.h>
 
 #include "esp_psram.h"
 #include "esp_pm.h"
@@ -95,6 +96,7 @@ extern std::string getHTMLcommit(void);
 
 std::vector<std::string> splitString(const std::string& str);
 void migrateConfiguration(void);
+void restoreConfigFromBackupIfMissing(void);
 bool setCpuFrequency(void);
 
 static const char *TAG = "MAIN";
@@ -419,6 +421,13 @@ extern "C" void app_main(void)
         }
     }
 
+    // Restore config.ini from its backup if a previous save or migration was
+    // interrupted (Wi-Fi drop, power loss, crash) and left it missing. Runs
+    // before the AP-mode check below so the device self-heals instead of
+    // dropping into setup mode with the user's whole configuration gone.
+    // ********************************************
+    restoreConfigFromBackupIfMissing();
+
     // Migrate parameter in config.ini to new naming (firmware 15.0 and newer)
     // ********************************************
     migrateConfiguration();
@@ -623,6 +632,23 @@ extern "C" void app_main(void)
     }
     else { // Any other error is critical and makes running the flow impossible. Init is going to abort.
         LogFile.WriteToFile(ESP_LOG_ERROR, TAG, "Initialization failed. Flow task start aborted. Loading reduced web interface...");
+    }
+}
+
+void restoreConfigFromBackupIfMissing(void) {
+    if (FileExists(CONFIG_FILE)) {
+        return; // config.ini present -- nothing to do
+    }
+
+    if (!FileExists(CONFIG_FILE_BACKUP)) {
+        return; // no backup to restore from
+    }
+
+    if (RenameFile(CONFIG_FILE_BACKUP, CONFIG_FILE)) {
+        LogFile.WriteToFile(ESP_LOG_WARN, TAG, "config.ini was missing -- restored it from " + std::string(CONFIG_FILE_BACKUP));
+    }
+    else {
+        LogFile.WriteToFile(ESP_LOG_ERROR, TAG, "config.ini missing and restore from " + std::string(CONFIG_FILE_BACKUP) + " failed");
     }
 }
 
@@ -946,13 +972,23 @@ void migrateConfiguration(void) {
     }
 
     if (migrated) {
-        // At least one replacement happened
+        // At least one replacement happened. Move the current config aside as
+        // the backup, then write the migrated version. DeleteFile() first so the
+        // rename has a free target (FATFS rename does not overwrite).
+        DeleteFile(CONFIG_FILE_BACKUP);
         if (!RenameFile(CONFIG_FILE, CONFIG_FILE_BACKUP)) {
             LogFile.WriteToFile(ESP_LOG_ERROR, TAG, "Failed to create backup of Config file!");
             return;
         }
 
         FILE *pfile = fopen(CONFIG_FILE, "w");
+        if (!pfile) {
+            // Opening the new config failed after the old one was moved aside.
+            // Restore the backup so we never leave the device with no config.
+            LogFile.WriteToFile(ESP_LOG_ERROR, TAG, "Failed to open config for writing during migration -- restoring backup");
+            RenameFile(CONFIG_FILE_BACKUP, CONFIG_FILE);
+            return;
+        }
 
         for (int i = 0; i < configLines.size(); i++) {
             if (!isInString(configLines[i], ";UNUSED_PARAMETER")) {
@@ -961,6 +997,8 @@ void migrateConfiguration(void) {
             }
         }
 
+        fflush(pfile);
+        fsync(fileno(pfile)); // make the migrated config durable before any later sleep/reset
         fclose(pfile);
         LogFile.WriteToFile(ESP_LOG_INFO, TAG, "Config file migrated. Saved backup to " + string(CONFIG_FILE_BACKUP));
     }

@@ -874,8 +874,20 @@ static esp_err_t delete_post_handler(httpd_req_t *req)
             LogFile.WriteToFile(ESP_LOG_INFO, TAG, "File does not exist: " + string(filename));
         }
 
-        /* Delete file */
-        unlink(filepath);
+        /* Delete file -- but never leave config.ini with no copy on disk. The
+         * web "Save" deletes config.ini and then uploads a fresh one; if that
+         * upload never lands durably (Wi-Fi drop, reboot, crash) the device
+         * would otherwise boot with no config and fall into the setup AP.
+         * Preserve the current config as the backup instead of deleting it; it
+         * is auto-restored on the next boot if the new upload never arrives. */
+        if (strcmp(filepath, CONFIG_FILE) == 0) {
+            DeleteFile(CONFIG_FILE_BACKUP); // free the rename target (FATFS won't overwrite)
+            RenameFile(CONFIG_FILE, CONFIG_FILE_BACKUP);
+            LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "config.ini preserved as backup before re-upload");
+        }
+        else {
+            unlink(filepath);
+        }
         LogFile.WriteToFile(ESP_LOG_DEBUG, TAG, "File deleted: " + string(filename));
         ESP_LOGI(TAG, "File deletion completed");
 
